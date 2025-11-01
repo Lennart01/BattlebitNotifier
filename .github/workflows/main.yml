@@ -1,0 +1,29 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Wails App
+        uses: dAppServer/wails-build-action@v2.2
+        with:
+          build-name: "BattleBit_Notifier"
+          build-platform: "windows/amd64"
+          package: true
+          
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "build/bin/BattleBit_Notifier.exe"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          prerelease: false
