@@ -20,7 +20,7 @@ jobs:
       - name: Build Wails App
         uses: dAppServer/wails-build-action@main
         with:
-          build-name: "BattleBit_Notifier"
+          build-name: "BattleBit_Notifier.exe"
           build-platform: "windows/amd64"
           package: true
 
