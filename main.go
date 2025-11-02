@@ -12,6 +12,7 @@ import (
 var assets embed.FS
 
 type Server struct {
+	Name         string `json:"Name"`
 	Map          string `json:"Map"`
 	MapSize      string `json:"MapSize"`
 	Gamemode     string `json:"Gamemode"`
@@ -27,13 +28,25 @@ type Server struct {
 	Build        string `json:"Build"`
 }
 
+type AlertConfig struct {
+	Maps       []string `json:"maps"`
+	Gamemodes  []string `json:"gamemodes"`
+	Regions    []string `json:"regions"`
+	MinPlayers int      `json:"minPlayers"`
+}
+
+type FilterLists struct {
+	Gamemodes []string `json:"gamemodes"`
+	Regions   []string `json:"regions"`
+}
+
 func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
 		Title:  "BattleBit Server Alerter",
 		Width:  600,
-		Height: 600,
+		Height: 750,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

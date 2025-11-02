@@ -15,24 +15,29 @@ import (
 )
 
 type App struct {
-	ctx      context.Context
-	servers  []Server
-	mapNames []string
+	ctx       context.Context
+	servers   []Server
+	gamemodes []string
+	regions   []string
 
-	alertLock  sync.RWMutex
-	alertMaps  []string
-	minPlayers int
+	alertLock      sync.RWMutex
+	alertConfig    AlertConfig
+	serverStates   map[string]string
+	alertedServers map[string]bool
 
 	dataLock sync.RWMutex
 }
 
 func NewApp() *App {
-	return &App{}
+	return &App{
+		serverStates:   make(map[string]string),
+		alertedServers: make(map[string]bool),
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.fetchDataAndMaps()
+	go a.fetchStaticData()
 	go a.pollServerData()
 }
 
@@ -40,125 +45,170 @@ func (a *App) pollServerData() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
+	a.fetchServerData()
+	a.checkAlerts()
+
 	for {
 		select {
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
-			a.fetchDataAndMaps()
-			a.checkAlert()
+			a.fetchServerData()
+			a.checkAlerts()
 		}
 	}
 }
 
-func (a *App) fetchDataAndMaps() {
+func (a *App) fetchStaticData() {
 	servers, err := getData()
 	if err != nil {
-		runtime.LogErrorf(a.ctx, "Error fetching data: %v", err)
+		runtime.LogErrorf(a.ctx, "Error fetching initial data: %v", err)
 		return
 	}
 
-	newMapNames := extractMapNames(servers)
+	gamemodeSet := make(map[string]bool)
+	regionSet := make(map[string]bool)
+
+	for _, server := range servers {
+		if server.Gamemode != "" {
+			gamemodeSet[server.Gamemode] = true
+		}
+		if server.Region != "" {
+			regionSet[server.Region] = true
+		}
+	}
+
+	gamemodes := make([]string, 0, len(gamemodeSet))
+	for m := range gamemodeSet {
+		gamemodes = append(gamemodes, m)
+	}
+	slices.Sort(gamemodes)
+
+	regions := make([]string, 0, len(regionSet))
+	for r := range regionSet {
+		regions = append(regions, r)
+	}
+	slices.Sort(regions)
+
+	a.dataLock.Lock()
+	a.gamemodes = gamemodes
+	a.regions = regions
+	a.servers = servers
+	a.dataLock.Unlock()
+
+	runtime.LogInfo(a.ctx, "Fetched static filter lists")
+}
+
+func (a *App) fetchServerData() {
+	servers, err := getData()
+	if err != nil {
+		runtime.LogErrorf(a.ctx, "Error fetching server data: %v", err)
+		return
+	}
 
 	a.dataLock.Lock()
 	a.servers = servers
-	needsUpdate := !slices.Equal(a.mapNames, newMapNames)
-	if needsUpdate {
-		a.mapNames = newMapNames
-	}
 	a.dataLock.Unlock()
-
-	if needsUpdate {
-		runtime.EventsEmit(a.ctx, "mapsUpdated", newMapNames)
-	}
 }
 
-func (a *App) checkAlert() {
+func (a *App) checkAlerts() {
 	a.alertLock.RLock()
-	targetMaps := a.alertMaps
-	targetPlayers := a.minPlayers
+	config := a.alertConfig
 	a.alertLock.RUnlock()
 
-	if len(targetMaps) == 0 || targetPlayers == 0 {
+	if len(config.Maps) == 0 {
 		return
 	}
 
-	targetMapSet := make(map[string]bool, len(targetMaps))
-	for _, m := range targetMaps {
+	targetMapSet := make(map[string]bool, len(config.Maps))
+	for _, m := range config.Maps {
 		targetMapSet[m] = true
 	}
 
-	a.dataLock.RLock()
-	defer a.dataLock.RUnlock()
-
-	totalPlayers := 0
-	serverCount := 0
-	for _, server := range a.servers {
-		if targetMapSet[server.Map] {
-			totalPlayers += server.Players
-			serverCount++
-		}
+	targetGamemodeSet := make(map[string]bool, len(config.Gamemodes))
+	for _, g := range config.Gamemodes {
+		targetGamemodeSet[g] = true
 	}
 
-	if totalPlayers >= targetPlayers {
-		runtime.LogInfof(a.ctx, "Alert triggered: Maps=%v, Players=%d", targetMaps, totalPlayers)
-
-		dialogOptions := runtime.MessageDialogOptions{
-			Type:    runtime.InfoDialog,
-			Title:   "BattleBit Alert",
-			Message: fmt.Sprintf("%d players found on your selected maps (%d servers)!", totalPlayers, serverCount),
-		}
-		_, err := runtime.MessageDialog(a.ctx, dialogOptions)
-		if err != nil {
-			runtime.LogErrorf(a.ctx, "Error showing message dialog: %v", err)
-		}
-
-		a.alertLock.Lock()
-		a.alertMaps = nil
-		a.minPlayers = 0
-		a.alertLock.Unlock()
-
-		runtime.EventsEmit(a.ctx, "alertTriggered")
+	targetRegionSet := make(map[string]bool, len(config.Regions))
+	for _, r := range config.Regions {
+		targetRegionSet[r] = true
 	}
-}
 
-func (a *App) GetMapList() []string {
 	a.dataLock.RLock()
-	defer a.dataLock.RUnlock()
-	return a.mapNames
-}
+	servers := a.servers
+	a.dataLock.RUnlock()
 
-func (a *App) SetAlert(mapNames []string, minPlayers int) {
 	a.alertLock.Lock()
 	defer a.alertLock.Unlock()
-	a.alertMaps = mapNames
-	a.minPlayers = minPlayers
 
-	runtime.LogInfof(a.ctx, "Alert set: Maps=%v, MinPlayers=%d", mapNames, minPlayers)
+	for _, server := range servers {
+		serverName := server.Name
+		currentMap := server.Map
+
+		if serverName == "" {
+			continue
+		}
+
+		previousMap := a.serverStates[serverName]
+
+		if currentMap != previousMap {
+			delete(a.alertedServers, serverName)
+		}
+
+		hasBeenAlerted := a.alertedServers[serverName]
+
+		if !hasBeenAlerted &&
+			targetMapSet[currentMap] &&
+			(len(targetGamemodeSet) == 0 || targetGamemodeSet[server.Gamemode]) &&
+			(len(targetRegionSet) == 0 || targetRegionSet[server.Region]) &&
+			server.Players >= config.MinPlayers {
+
+			runtime.LogInfof(a.ctx, "Alert triggered: Server '%s' switched to map '%s' with %d players", serverName, currentMap, server.Players)
+
+			dialogOptions := runtime.MessageDialogOptions{
+				Type:    runtime.InfoDialog,
+				Title:   "BattleBit Alert",
+				Message: fmt.Sprintf("Server '%s' is now playing '%s' with %d players!", serverName, currentMap, server.Players),
+			}
+			_, err := runtime.MessageDialog(a.ctx, dialogOptions)
+			if err != nil {
+				runtime.LogErrorf(a.ctx, "Error showing message dialog: %v", err)
+			}
+
+			a.alertedServers[serverName] = true
+		}
+
+		a.serverStates[serverName] = currentMap
+	}
+}
+
+func (a *App) GetFilterLists() FilterLists {
+	a.dataLock.RLock()
+	defer a.dataLock.RUnlock()
+	return FilterLists{
+		Gamemodes: a.gamemodes,
+		Regions:   a.regions,
+	}
+}
+
+func (a *App) SetAlert(config AlertConfig) {
+	a.alertLock.Lock()
+	defer a.alertLock.Unlock()
+	a.alertConfig = config
+	a.alertedServers = make(map[string]bool)
+
+	runtime.LogInfof(a.ctx, "Alert set: Maps=%v, Gamemodes=%v, Regions=%v, MinPlayers=%d", config.Maps, config.Gamemodes, config.Regions, config.MinPlayers)
+	runtime.EventsEmit(a.ctx, "alertSet")
 }
 
 func (a *App) CancelAlert() {
 	a.alertLock.Lock()
 	defer a.alertLock.Unlock()
-	a.alertMaps = nil
-	a.minPlayers = 0
+	a.alertConfig = AlertConfig{}
+	a.alertedServers = make(map[string]bool)
 	runtime.LogInfo(a.ctx, "Alert cancelled by user")
-}
-
-func extractMapNames(servers []Server) []string {
-	mapSet := make(map[string]bool)
-	for _, server := range servers {
-		if server.Map != "" {
-			mapSet[server.Map] = true
-		}
-	}
-
-	maps := make([]string, 0, len(mapSet))
-	for m := range mapSet {
-		maps = append(maps, m)
-	}
-	slices.Sort(maps)
-	return maps
+	runtime.EventsEmit(a.ctx, "alertCancelled")
 }
 
 func getData() ([]Server, error) {

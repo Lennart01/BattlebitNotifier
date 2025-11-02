@@ -6,10 +6,10 @@ export function CancelAlert() {
   return window['go']['main']['App']['CancelAlert']();
 }
 
-export function GetMapList() {
-  return window['go']['main']['App']['GetMapList']();
+export function GetFilterLists() {
+  return window['go']['main']['App']['GetFilterLists']();
 }
 
-export function SetAlert(arg1, arg2) {
-  return window['go']['main']['App']['SetAlert'](arg1, arg2);
+export function SetAlert(arg1) {
+  return window['go']['main']['App']['SetAlert'](arg1);
 }

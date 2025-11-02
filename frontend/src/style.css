@@ -50,8 +50,8 @@ button {
     box-sizing: border-box;
 }
 
-#map-list-container {
-    height: 150px;
+.list-container {
+    height: 120px;
     overflow-y: auto;
     background-color: #3a4b62;
     border: 1px solid #555;

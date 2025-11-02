@@ -1,12 +1,59 @@
 import { useState, useEffect } from 'react';
 import './App.css';
-import { GetMapList, SetAlert, CancelAlert } from '../wailsjs/go/main/App';
+import { GetFilterLists, SetAlert, CancelAlert } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime';
 
+const allMaps = [
+    'Azagor', 'Basra', 'Construction', 'District', 'Dusty Dew',
+    'Eduardovo', 'Frugis', 'Isle', 'Kodiak', 'Lonovo', 'Multu Islands',
+    'Namak', 'Oil Dunes', 'Outskirts', 'River', 'Salhan', 'Sandy Sunset',
+    'Tensa Town', 'Valley', 'Wakistan', 'Wine Paradise', 'Zalfibay'
+].sort();
+
+function CheckboxList({ title, items, selectedItems, onChange, disabled }) {
+    if (items.length === 0) {
+        return (
+            <div className="form-group">
+                <label>{title}:</label>
+                <div className="list-container">
+                    <span>Loading...</span>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="form-group">
+            <label>{title}:</label>
+            <div className="list-container">
+                {items.map((item) => (
+                    <div key={item} className="checkbox-item">
+                        <input
+                            type="checkbox"
+                            id={`${title}-${item}`}
+                            value={item}
+                            checked={selectedItems.includes(item)}
+                            onChange={onChange}
+                            disabled={disabled}
+                        />
+                        <label htmlFor={`${title}-${item}`}>{item}</label>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+
 function App() {
-    const [mapList, setMapList] = useState([]);
+    const [gamemodeList, setGamemodeList] = useState([]);
+    const [regionList, setRegionList] = useState([]);
+
     const [selectedMaps, setSelectedMaps] = useState([]);
-    const [playerCount, setPlayerCount] = useState(100);
+    const [selectedGamemodes, setSelectedGamemodes] = useState([]);
+    const [selectedRegions, setSelectedRegions] = useState([]);
+    const [minPlayers, setMinPlayers] = useState(10);
+
     const [status, setStatus] = useState('No alert set.');
     const [isAlertSet, setIsAlertSet] = useState(false);
     const [statusClass, setStatusClass] = useState('');
@@ -16,25 +63,34 @@ function App() {
         setStatusClass('');
         setIsAlertSet(false);
         setSelectedMaps([]);
-        setPlayerCount(100);
+        setSelectedGamemodes([]);
+        setSelectedRegions([]);
+        setMinPlayers(10);
     };
 
     useEffect(() => {
-        GetMapList().then((maps) => setMapList(maps || []));
-
-        const mapsUpdatedCleanup = EventsOn('mapsUpdated', (maps) => {
-            setMapList(maps || []);
+        GetFilterLists().then(lists => {
+            setGamemodeList(lists.gamemodes || []);
+            setRegionList(lists.regions || []);
         });
 
-        const alertTriggeredCleanup = EventsOn('alertTriggered', () => {
-            resetUI('Alert triggered! Ready for new alert.');
+        const alertSetCleanup = EventsOn('alertSet', () => {
+            setStatus(
+                `Alert set for ${selectedMaps.length} maps.`
+            );
+            setStatusClass('status-success');
+            setIsAlertSet(true);
+        });
+
+        const alertCancelledCleanup = EventsOn('alertCancelled', () => {
+            resetUI('Alert cancelled by user.');
         });
 
         return () => {
-            mapsUpdatedCleanup();
-            alertTriggeredCleanup();
+            alertSetCleanup();
+            alertCancelledCleanup();
         };
-    }, []);
+    }, [selectedMaps.length]);
 
     const handleSetAlert = () => {
         if (selectedMaps.length === 0) {
@@ -43,68 +99,76 @@ function App() {
             return;
         }
 
-        if (playerCount < 1) {
+        if (minPlayers < 1) {
             setStatus('Error: Please enter a valid player count.');
             setStatusClass('status-error');
             return;
         }
 
-        SetAlert(selectedMaps, playerCount);
-        setStatus(
-            `Alert set for ${selectedMaps.length} maps @ ${playerCount} players.`
-        );
-        setStatusClass('status-success');
-        setIsAlertSet(true);
+        const config = {
+            maps: selectedMaps,
+            gamemodes: selectedGamemodes,
+            regions: selectedRegions,
+            minPlayers: minPlayers
+        };
+
+        SetAlert(config);
     };
 
     const handleCancelAlert = () => {
         CancelAlert();
-        resetUI('Alert cancelled by user.');
     };
 
-    const handleMapCheckboxChange = (e) => {
+    const createCheckboxHandler = (setter) => (e) => {
         const { value, checked } = e.target;
         if (checked) {
-            setSelectedMaps((prev) => [...prev, value]);
+            setter((prev) => [...prev, value]);
         } else {
-            setSelectedMaps((prev) => prev.filter((map) => map !== value));
+            setter((prev) => prev.filter((item) => item !== value));
         }
     };
+
+    const handleMapCheckboxChange = createCheckboxHandler(setSelectedMaps);
+    const handleGamemodeCheckboxChange = createCheckboxHandler(setSelectedGamemodes);
+    const handleRegionCheckboxChange = createCheckboxHandler(setSelectedRegions);
 
     return (
         <div className="container">
             <h2>BattleBit Alerter</h2>
-            <div className="form-group">
-                <label>Select Map(s):</label>
-                <div id="map-list-container">
-                    {mapList.length === 0 && (
-                        <span>Loading maps...</span>
-                    )}
-                    {mapList.map((mapName) => (
-                        <div key={mapName} className="checkbox-item">
-                            <input
-                                type="checkbox"
-                                id={`map-${mapName}`}
-                                value={mapName}
-                                checked={selectedMaps.includes(mapName)}
-                                onChange={handleMapCheckboxChange}
-                                disabled={isAlertSet}
-                            />
-                            <label htmlFor={`map-${mapName}`}>{mapName}</label>
-                        </div>
-                    ))}
-                </div>
-            </div>
+
+            <CheckboxList
+                title="Select Map(s)"
+                items={allMaps}
+                selectedItems={selectedMaps}
+                onChange={handleMapCheckboxChange}
+                disabled={isAlertSet}
+            />
+
+            <CheckboxList
+                title="Select Region(s) (Optional)"
+                items={regionList}
+                selectedItems={selectedRegions}
+                onChange={handleRegionCheckboxChange}
+                disabled={isAlertSet}
+            />
+
+            <CheckboxList
+                title="Select Gamemode(s) (Optional)"
+                items={gamemodeList}
+                selectedItems={selectedGamemodes}
+                onChange={handleGamemodeCheckboxChange}
+                disabled={isAlertSet}
+            />
 
             <div className="form-group">
-                <label htmlFor="player-count">Min Total Players:</label>
+                <label htmlFor="player-count">Min Players on Server:</label>
                 <input
                     id="player-count"
                     type="number"
                     min="1"
-                    value={playerCount}
+                    value={minPlayers}
                     onChange={(e) =>
-                        setPlayerCount(parseInt(e.target.value, 10) || 1)
+                        setMinPlayers(parseInt(e.target.value, 10) || 1)
                     }
                     disabled={isAlertSet}
                 />
