@@ -168,7 +168,7 @@ function App() {
                     min="1"
                     value={minPlayers}
                     onChange={(e) =>
-                        setMinPlayers(parseInt(e.target.value, 10) || 1)
+                        setMinPlayers(parseInt(e.target.value, 10))
                     }
                     disabled={isAlertSet}
                 />
